@@ -11,6 +11,7 @@
                 //"lto=yes",
                 //"telemetry_enabled=yes",
                 //"tracy_enabled=yes",
+                //"native_api_enabled=no"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

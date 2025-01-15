@@ -49,6 +49,10 @@ void DD3DTestCppApiNode::_ready() {
 	cfg2->set_visible_instance_bounds(false);
 	DEV_ASSERT(cfg2->is_visible_instance_bounds() == false);
 	UtilityFunctions::print("New Visible bounds: ", cfg2->is_visible_instance_bounds());
+
+#ifdef DEV_ENABLED
+	DebugDrawManager::api_test6(nullptr, Variant(), false, 1, DebugDrawManager::SECOND_VALUE, 0.5f, "test", "test2", "test3");
+#endif
 }
 
 float timer_cubes = 0;

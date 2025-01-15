@@ -82,11 +82,6 @@ def setup_defines_and_flags(env: SConsEnvironment, src_out: list):
     if "release" in env["target"] and not env["force_enabled_dd3d"]:
         env.Append(CPPDEFINES=["DISABLE_DEBUG_RENDERING"])
 
-    if env["native_api_enabled"]:
-        env.Append(CPPDEFINES=["NATIVE_API_ENABLED"])
-        if not COMMAND_LINE_TARGETS:
-            gen_apis(None, None, env, src_out)
-
     if env["telemetry_enabled"]:
         tele_src = "editor/dst_modules/GDExtension/usage_time_reporter.cpp"
         if os.path.exists(os.path.join(src_folder, tele_src)):
@@ -140,6 +135,12 @@ def setup_defines_and_flags(env: SConsEnvironment, src_out: list):
                 "log",
             ]
         )
+
+    if env["native_api_enabled"]:
+        env.Append(CPPDEFINES=["NATIVE_API_ENABLED"])
+        if not COMMAND_LINE_TARGETS:
+            gen_apis(None, None, env, src_out)
+
     print()
 
 
@@ -177,6 +178,7 @@ def gen_apis(target, source, env: SConsEnvironment, src_out: list = []):
         env,
         "src/native_api/templates/c_api.cpp",
         os.path.join(os.path.dirname(env["addon_output_dir"]), "native_api"),
+        src_folder,
         src_out,
     )
 
@@ -251,7 +253,6 @@ if env["build_cpp_api_tests"]:
     additional_src = []
 
     if env["tracy_enabled"]:
-        # env.Append(CPPDEFINES=["TRACY_ENABLE", "TRACY_ON_DEMAND", "TRACY_DELAYED_INIT", "TRACY_MANUAL_LIFETIME"])
         additional_src.append("src/utils/TracyClientCustom.cpp")
 
     shbin = env.Default(

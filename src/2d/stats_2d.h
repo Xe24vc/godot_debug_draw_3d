@@ -16,7 +16,7 @@ using namespace godot;
  *
  * To get an instance of this class with current statistics, use DebugDraw2D.get_render_stats.
  */
-class DebugDraw2DStats : public RefCounted {
+NAPI_CLASS_REF class DebugDraw2DStats : public RefCounted {
 	GDCLASS(DebugDraw2DStats, RefCounted)
 
 protected:
@@ -29,9 +29,9 @@ private:
 
 public:
 	NAPI int64_t get_overlay_text_groups() const { return overlay_text_groups; }
-	NAPI void set_overlay_text_groups(int64_t val) {};
+	void set_overlay_text_groups(int64_t val) {};
 	NAPI int64_t get_overlay_text_lines() const { return overlay_text_lines; }
-	NAPI void set_overlay_text_lines(int64_t val) {};
+	void set_overlay_text_lines(int64_t val) {};
 
 #undef DEFINE_DEFAULT_PROP
 

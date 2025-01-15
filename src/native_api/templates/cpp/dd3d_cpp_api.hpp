@@ -15,6 +15,7 @@ __pragma(warning(disable : 4244 26451 26495));
 // GENERATOR_DD3D_API_INCLUDES
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/viewport.hpp>
+#include <godot_cpp/classes/font.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/variant/variant.hpp>
 #if _MSC_VER
@@ -27,6 +28,7 @@ __pragma(warning(default : 4244 26451 26495));
 
 struct _DD3D_Loader_ {
 	static constexpr const char *log_prefix = "[DD3D] ";
+	static constexpr const char *get_funcs_is_double_name = "_get_native_functions_is_double";
 	static constexpr const char *get_funcs_hash_name = "_get_native_functions_hash";
 	static constexpr const char *get_funcs_name = "_get_native_functions";
 
@@ -43,13 +45,26 @@ struct _DD3D_Loader_ {
 			godot::Object *dd3d = godot::Engine::get_singleton()->get_singleton("DebugDrawManager");
 
 #ifndef DD3D_DISABLE_MISMATCH_CHECKS
+			if (!dd3d->has_method(get_funcs_is_double_name)) {
+				godot::UtilityFunctions::printerr(log_prefix, get_funcs_is_double_name, " not found!");
+				return nullptr;
+			}
+
+#ifdef REAL_T_IS_DOUBLE
+			bool is_double = true;
+#else
+			bool is_double = false;
+#endif
+			if ((bool)dd3d->call(get_funcs_is_double_name) != is_double) {
+				godot::UtilityFunctions::printerr(log_prefix, "The precision of Vectors and Matrices of DD3D and the current library do not match!");
+				return nullptr;
+			}
+
 			if (!dd3d->has_method(get_funcs_hash_name)) {
 				godot::UtilityFunctions::printerr(log_prefix, get_funcs_hash_name, " not found!");
 				return nullptr;
 			}
-#endif
 
-#ifndef DD3D_DISABLE_MISMATCH_CHECKS
 			if (!dd3d->has_method(get_funcs_name)) {
 				godot::UtilityFunctions::printerr(log_prefix, get_funcs_name, " not found!");
 				return nullptr;

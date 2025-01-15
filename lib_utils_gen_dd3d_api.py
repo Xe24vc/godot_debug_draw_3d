@@ -1,15 +1,95 @@
 #!/usr/bin/env python3
 
 from SCons.Script.SConscript import SConsEnvironment
-from patches import unity_tools
 
-import SCons
 import os, shutil, json, re, hashlib
 import lib_utils
 
 
+def dev_print(line: str):
+    if False:
+        print(line)
+
+
+class DefineContext:
+    default_defines: set = []
+    active_defines: set = []
+    if_blocks: list = []
+
+    def __init__(self, env: SConsEnvironment):
+        # use only defines, not macros
+        self.default_defines = [d for d in env["CPPDEFINES"] if re.search(r"\w+", d)[0] == d]
+        self.active_defines = set(self.default_defines)
+        dev_print(f"Global defines: {self.default_defines}")
+
+    def reset(self):
+        self.active_defines = set(self.default_defines)
+        if_blocks: list = []
+
+    def parse_line(self, line: str) -> bool:
+        stripped_line: str = line.strip()
+        if stripped_line.startswith("#define "):
+            def_line = line[len("#define ") :]
+            split = def_line.split(" ")
+            if def_line == re.search(r"\w+", split[0])[0]:
+                dev_print(f"\tFound define: {def_line}")
+                self.active_defines.add(def_line)
+            return False
+
+        # TODO support #if
+        # TODO support #elif
+        if stripped_line.startswith("#ifdef ") or stripped_line.startswith("#ifndef "):
+            is_inverted = stripped_line.startswith("#ifndef ")
+            if_name = stripped_line[: stripped_line.find(" ")]
+            define_name = stripped_line[stripped_line.find(" ") + 1 :]
+
+            is_defined = define_name in self.active_defines
+            self.if_blocks.append(not is_defined if is_inverted else is_defined)
+            if self.if_blocks[-1]:
+                dev_print(
+                    f"\tFound {if_name} with '{define_name}', which is {'active' if is_defined else 'inactive'}: next lines will be parsed."
+                )
+            else:
+                dev_print(
+                    f"\tFound {if_name} with '{define_name}', which is {'active' if is_defined else 'inactive'}: next lines will be ignored."
+                )
+            return False
+
+        if stripped_line.startswith("#if "):
+            self.if_blocks.append("ignored")
+            dev_print("\tFound #if. Ignoring...")
+            return False
+
+        if stripped_line.startswith("#else"):
+            if self.if_blocks[-1] == "ignored":
+                return False
+
+            self.if_blocks[-1] = not self.if_blocks[-1]
+            dev_print(
+                f"\tFound #else: inverting the last if block: {'next lines will be parsed.' if self.if_blocks[-1] else 'next lines will be ignored.'}"
+            )
+            return False
+
+        if stripped_line.startswith("#endif"):
+            self.if_blocks.pop()
+            dev_print(f"\tFound #endif: removing the last if block.")
+            if len(self.if_blocks):
+                if self.if_blocks[-1] != "ignored":
+                    dev_print(
+                        "\t\tNext lines will be parsed." if self.if_blocks[-1] else "\t\tNext lines will be ignored."
+                    )
+            return False
+
+        if len(self.if_blocks):
+            val = self.if_blocks[-1]
+            if val == "ignored":
+                return True
+            return val
+
+        return True
+
+
 def insert_lines_at_mark(lines: list, mark: str, insert_lines: list):
-    insert_mark = mark
     insert_index = -1
     for idx, line in enumerate(lines):
         if line.endswith(mark):
@@ -19,22 +99,29 @@ def insert_lines_at_mark(lines: list, mark: str, insert_lines: list):
     lines[insert_index:insert_index] = insert_lines
 
 
-def get_api_functions(headers: list) -> dict:
+def get_api_functions(env: SConsEnvironment, headers: list) -> dict:
     classes = {}
+    def_ctx: DefineContext = DefineContext(env)
 
     for header in headers:
-        print(header)
+        print(f"Parsing {header} ...")
         text_data = lib_utils.read_all_text(header)
         lines = text_data.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-        lines = [line.strip() for line in lines if len(line.strip())]
+        lines = [line.strip() for line in lines]
+        def_ctx.reset()
 
         functions = {}
+        enums = {}
         current_class = ""
 
         is_singleton = False
         is_refcounted = False
 
         for idx, line in enumerate(lines):
+            if not def_ctx.parse_line(line):
+                dev_print(f"\t\tSkipping: {idx + 1}: {line}")
+                continue
+
             docs = []
             if lines[idx - 1] == "*/":
                 doc_idx = idx - 1
@@ -65,7 +152,60 @@ def get_api_functions(headers: list) -> dict:
                 current_class = re.search(r"\w+", line[len(class_prefix) :])[0].strip()
 
                 functions = {}
-                classes[current_class] = {"functions": functions, "type": class_type, "docs": docs}
+                enums = {}
+                classes[current_class] = {"enums": enums, "functions": functions, "type": class_type, "docs": docs}
+
+                if is_singleton:
+                    print(f"Found Singleton {current_class}")
+                elif is_refcounted:
+                    print(f"Found RefCounted {current_class}")
+                continue
+
+            if line.startswith("NAPI_ENUM enum "):
+                split = line[len("NAPI_ENUM enum ") : line.find("{")].split(":")
+                name = split[0].strip()
+                type = split[1].strip()
+
+                print(f"\tFound Enum {name} of type {type}")
+                enum_lines = [line[line.rfind("{") + 1 :]]
+                eidx = idx + 1
+                while True:
+                    el = lines[eidx]
+                    bpos = el.rfind("}")
+                    if bpos != -1:
+                        el = el[:bpos]
+                    enum_lines.append(el)
+
+                    if bpos != -1:
+                        break
+                    eidx += 1
+
+                # remove comments and newlines
+                enum_lines = [
+                    (l[: l.rfind("//")] if l.rfind("//") != -1 else l).strip() for l in enum_lines if len(l.strip())
+                ]
+
+                enum_lines = "".join(enum_lines)
+                # split by comma and remove empty
+                enum_lines = [l.strip() for l in enum_lines.split(",") if len(l.strip())]
+                print("\t\tEnum lines:", enum_lines)
+
+                values = {}
+                last_val = -1
+                for e in enum_lines:
+                    split = e.split("=")
+                    key = split[0].strip()
+                    value = last_val + 1
+                    if len(split) == 2:
+                        value = split[1].strip()
+
+                    if value is int:
+                        last_val = value
+                    elif value is str and value.isdigit():
+                        last_val = int(value)
+                    values[key] = str(value)
+
+                enums[name] = {"type": type, "values": values}
                 continue
 
             if line.startswith("NAPI "):
@@ -79,7 +219,11 @@ def get_api_functions(headers: list) -> dict:
                         ret_type = "void"
                         is_self_return = True
 
-                args_str = line[line.find("(") + 1 : line.rfind(")")]
+                # get all args even in one-line functions
+                cbrace_end = line.rfind("{")
+                args_str = line[
+                    line.find("(") + 1 : line.rfind(")", 0, cbrace_end if cbrace_end != -1 else len(line) - 1)
+                ]
                 args = []
 
                 if not is_singleton:
@@ -111,7 +255,7 @@ def get_api_functions(headers: list) -> dict:
                             break
 
                 args_dict = []
-                for a in args:
+                for aidx, a in enumerate(args):
                     arg_name_match = re.search(r"\b(\w+)\s*=", a)
                     if arg_name_match:
                         new_dict = {
@@ -123,10 +267,16 @@ def get_api_functions(headers: list) -> dict:
                         args_dict.append(new_dict)
                     else:
                         arg_name_match = re.search(r"\b(\w+)$", a)
-                        new_dict = {
-                            "name": arg_name_match.group(1).strip(),
-                            "type": a[: a.index(arg_name_match.group(1))].strip(),
-                        }
+                        if arg_name_match:
+                            new_dict = {
+                                "name": arg_name_match.group(1).strip(),
+                                "type": a[: a.index(arg_name_match.group(1))].strip(),
+                            }
+                        else:
+                            new_dict = {
+                                "name": f"arg{aidx}",
+                                "type": a.strip(),
+                            }
                         new_dict["c_type"] = new_dict["type"].replace("&", "").strip()
                         args_dict.append(new_dict)
 
@@ -138,20 +288,23 @@ def get_api_functions(headers: list) -> dict:
                     "docs": docs,
                 }
                 functions[f"{current_class}_{func_name}"] = fun_dict
+                print(f"\tFound method {func_name}")
+
     return classes
 
 
-def generate_native_api(c_api_template: str, out_folder: str, src_out: list) -> dict:
-    # TODO load all headers
-    # and better to load all processed headers
-    header_files = ["src/3d/config_3d.h", "src/3d/config_scope_3d.h", "src/3d/debug_draw_3d.h", "src/3d/stats_3d.h",]
-    classes = get_api_functions(header_files)
+def generate_native_api(
+    env: SConsEnvironment, header_files: list, c_api_template: str, out_folder: str, src_out: list
+) -> dict:
+    classes = get_api_functions(env, header_files)
 
     new_funcs = []
     new_func_regs = []
     new_ref_clears = []
 
     for cls in classes:
+        print(f"Genearating DD3D C_API constructors for {cls}...")
+
         is_refcounted = classes[cls]["type"] == "refcounted"
         if not is_refcounted:
             continue
@@ -201,6 +354,8 @@ def generate_native_api(c_api_template: str, out_folder: str, src_out: list) -> 
         new_ref_clears.append(f"\tCLEAR_REFS({cls}, {cls}_NAPIWrapper_storage);")
 
     for cls in classes:
+        print(f"Genearating DD3D C_API for {cls}...")
+
         class_type = classes[cls]["type"]
         is_singleton = class_type == "singleton"
         is_refcounted = class_type == "refcounted"
@@ -226,6 +381,8 @@ def generate_native_api(c_api_template: str, out_folder: str, src_out: list) -> 
 
             args = func["args"]
 
+            # TODO convert godot::Object's to uint64_t with get_instance_id
+            # TODO convert godot::Variant's to void* with _native_ptr
             def process_arg_defines(arg: dict):
                 type = arg["type"]
                 name = arg["name"]
@@ -303,14 +460,17 @@ def gen_cpp_api(env: SConsEnvironment, api: dict, out_folder: str, additional_in
     namespaces = {}
     fwd_decls = []
 
-
     for cls in classes:
+        print(f"Genearating CPP_API forward declarations for {cls}...")
         functions = classes[cls]["functions"]
         cls_is_class = classes[cls]["type"] != "singleton"
         if cls_is_class:
-            fwd_decls.append(f'class {cls};')
+            fwd_decls.append(f"class {cls};")
 
     for cls in classes:
+        print(f"Genearating CPP_API for {cls}...")
+
+        enums = classes[cls]["enums"]
         functions = classes[cls]["functions"]
         cls_is_class = classes[cls]["type"] != "singleton"
         cls_indent = "\t" if cls_is_class else ""
@@ -318,6 +478,21 @@ def gen_cpp_api(env: SConsEnvironment, api: dict, out_folder: str, additional_in
         if cls not in namespaces:
             is_namespace_a_class[cls] = cls_is_class
             namespaces[cls] = []
+
+        # TODO convert enum to uint64_t!!!
+        for enum_name in enums:
+            type = enums[enum_name]["type"]
+            values = enums[enum_name]["values"]
+            enum_lines = []
+            if cls_is_class:
+                enum_lines.append("public:")
+            enum_lines.append(f"{cls_indent}enum {enum_name} : {type} {{")
+            for value_name in values:
+                enum_lines.append(f"{cls_indent}\t{value_name} = {values[value_name]},")
+            enum_lines.append(f"{cls_indent}}};")
+            enum_lines.append("")
+
+            namespaces[cls] += enum_lines
 
         if cls_is_class:
             con_lines = []
@@ -518,15 +693,20 @@ def gen_cpp_api(env: SConsEnvironment, api: dict, out_folder: str, additional_in
     return lib_utils.write_all_text(os.path.join(out_folder, "dd3d_cpp_api.hpp"), "\n".join(lines))
 
 
-def gen_apis(env: SConsEnvironment, c_api_template: str, out_folder: str, src_out: list):
+def gen_apis(env: SConsEnvironment, c_api_template: str, out_folder: str, src_folder: str, src_out: list):
     print("Generating native API!")
     os.makedirs(out_folder, exist_ok=True)
 
-    api = generate_native_api(c_api_template, out_folder, src_out)
+    src = json.loads(lib_utils.read_all_text(src_folder + "/default_sources.json"))
+    header_files = [os.path.join(src_folder, f.replace(".cpp", ".h")).replace("\\", "/") for f in src]
+    header_files = [h for h in header_files if os.path.exists(h)]
+
+    api = generate_native_api(env, header_files, c_api_template, out_folder, src_out)
     if api == None:
         print("Couldn't get the Native API")
         return 110
 
     if not gen_cpp_api(env, api, os.path.join(out_folder, "cpp"), ["camera3d"]):
         return 111
+    print("The generation is finished!")
     return 0

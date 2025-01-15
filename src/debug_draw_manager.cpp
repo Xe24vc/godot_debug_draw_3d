@@ -57,6 +57,7 @@ void DebugDrawManager::_bind_methods() {
 
 #ifdef NATIVE_API_ENABLED
 	ClassDB::bind_method(D_METHOD(NAMEOF(_get_native_functions)), &DebugDrawManager::_get_native_functions);
+	ClassDB::bind_method(D_METHOD(NAMEOF(_get_native_functions_is_double)), &DebugDrawManager::_get_native_functions_is_double);
 	ClassDB::bind_method(D_METHOD(NAMEOF(_get_native_functions_hash)), &DebugDrawManager::_get_native_functions_hash);
 #endif
 
@@ -135,6 +136,14 @@ DebugDrawManager::~DebugDrawManager() {
 #ifdef NATIVE_API_ENABLED
 Dictionary DebugDrawManager::_get_native_functions() {
 	return NATIVE_API::get_functions().get("functions", Dictionary());
+}
+
+bool DebugDrawManager::_get_native_functions_is_double() {
+#ifdef REAL_T_IS_DOUBLE
+	return true;
+#else
+	return false;
+#endif
 }
 
 int64_t DebugDrawManager::_get_native_functions_hash() {
